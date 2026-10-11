@@ -1,0 +1,49 @@
+{
+  "name": "stadium-cashbook",
+  "productName": "Stadium Cashbook",
+  "version": "1.0.0",
+  "description": "Daily cash, expenses, credit card, bank, employees and monthly reports for the pharmacy (replaces 2026StadiumInfo.xlsx).",
+  "main": "main.js",
+  "author": "Arafat Salih Aydiner",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/copy-vendor.js",
+    "start": "electron .",
+    "test": "node scripts/test-model.js",
+    "dist": "electron-builder --mac --universal"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "38.8.6",
+    "electron-builder": "26.0.12",
+    "exceljs": "4.4.0"
+  },
+  "build": {
+    "appId": "com.aydiner.stadiumcashbook",
+    "productName": "Stadium Cashbook",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.finance",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "target": [
+        {
+          "target": "dmg"
+        },
+        {
+          "target": "zip"
+        }
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    }
+  }
+}
