@@ -173,16 +173,74 @@
     return s;
   }
 
+  // Plain totals of one month, no comparisons.
+  function monthTotals(data, yearNum, m) {
+    const year = data.years[yearNum];
+    const mo = year && year.months[m];
+    if (!mo) return null;
+    const payouts = mo.daily.rows.reduce((s, r) => s + rowTotal(r), 0);
+    const cash = mapTotal(mo.daily.cash);
+    const general = mo.general.rows.reduce((s, r) => s + rowTotal(r), 0);
+    let credit = 0, totalR = 0;
+    for (const v of Object.values(mo.card.days)) { credit += val(v.credit); totalR += val(v.totalR); }
+    const salaryTotal = year.employees.reduce((s, e) => s + employeeSalary(year, e, m), 0);
+    return {
+      payouts, cash, sales: payouts + cash, general, credit, totalR, salaryTotal,
+      hasData: payouts !== 0 || cash !== 0 || general !== 0 || credit !== 0 || totalR !== 0,
+    };
+  }
+
+  // The same month one year earlier. Real data in the app is used when that year/month has entries;
+  // the "last year" figures typed on the month (or imported from the workbook) take priority for cash and sales.
+  function previousYearMonth(data, yearNum, m) {
+    const prevNum = Number(yearNum) - 1;
+    const stored = monthTotals(data, prevNum, m);
+    const prev = stored && stored.hasData ? stored : null;
+    const mo = data.years[yearNum].months[m];
+    const ly = mo.daily.lastYear || {};
+    const typed = (v) => (v == null || v === '' ? null : val(v));
+    const typedCash = typed(ly.cash), typedSales = typed(ly.sales);
+    const card = (mo.card.compare || []).find((c) => String(c.label).trim() === String(prevNum));
+    const pick = (typedV, key) => (typedV != null ? { v: typedV, src: 'typed' } : prev ? { v: prev[key], src: 'data' } : { v: null, src: null });
+    const cash = pick(typedCash, 'cash');
+    const sales = pick(typedSales, 'sales');
+    const credit = prev && prev.credit ? { v: prev.credit, src: 'data' } : card && card.credit != null && card.credit !== '' ? { v: val(card.credit), src: 'typed' } : { v: null, src: null };
+    const totalR = prev && prev.totalR ? { v: prev.totalR, src: 'data' } : card && card.totalR != null && card.totalR !== '' ? { v: val(card.totalR), src: 'typed' } : { v: null, src: null };
+    const fromData = (key) => (prev ? { v: prev[key], src: 'data' } : { v: null, src: null });
+    return {
+      year: prevNum, stored: !!prev,
+      cash, sales, credit, totalR,
+      payouts: fromData('payouts'), general: fromData('general'), salaryTotal: fromData('salaryTotal'),
+    };
+  }
+
+  // Category-by-category comparison with the same month last year (only when last year is in the app).
+  function categoryComparison(data, yearNum, m, sheet) {
+    const prevYear = data.years[Number(yearNum) - 1];
+    const cur = data.years[yearNum].months[m][sheet].rows;
+    const prev = prevYear ? prevYear.months[m][sheet].rows : [];
+    const map = new Map();
+    const add = (rows, key) => {
+      for (const r of rows) {
+        const n = normName(r.name) || r.id;
+        const e = map.get(n) || { name: r.name, now: 0, before: 0 };
+        e[key] += rowTotal(r);
+        map.set(n, e);
+      }
+    };
+    add(prev, 'before');
+    add(cur, 'now');
+    return [...map.values()].filter((e) => e.now || e.before)
+      .map((e) => ({ ...e, change: e.now - e.before, pct: pctChange(e.now, e.before) }))
+      .sort((a, b) => Math.max(b.now, b.before) - Math.max(a.now, a.before));
+  }
+
   function monthSummary(data, yearNum, m) {
     const year = data.years[yearNum];
     const mo = year.months[m];
     const days = daysInMonth(yearNum, m);
-    const payouts = mo.daily.rows.reduce((s, r) => s + rowTotal(r), 0);
-    const cash = mapTotal(mo.daily.cash);
-    const sales = payouts + cash;
-    const general = mo.general.rows.reduce((s, r) => s + rowTotal(r), 0);
-    let credit = 0, totalR = 0;
-    for (const v of Object.values(mo.card.days)) { credit += val(v.credit); totalR += val(v.totalR); }
+    const t = monthTotals(data, yearNum, m);
+    const { payouts, cash, sales, general, credit, totalR } = t;
     const bank = bankForMonth(year, yearNum, m);
     const salaries = year.employees.map((e) => ({ name: e.name, amount: employeeSalary(year, e, m) }));
     const dailySales = [];
@@ -191,9 +249,8 @@
       dailyCash.push(val(mo.daily.cash[d]));
       dailySales.push(dayTotal(mo.daily.rows, d) + val(mo.daily.cash[d]));
     }
-    const ly = mo.daily.lastYear || {};
-    const lyCash = ly.cash == null || ly.cash === '' ? null : val(ly.cash);
-    const lySales = ly.sales == null || ly.sales === '' ? null : val(ly.sales);
+    const prev = previousYearMonth(data, yearNum, m);
+    const lyCash = prev.cash.v, lySales = prev.sales.v;
     const rev = year.revenue[m] || {};
     return {
       month: m, name: MONTHS[m], days,
@@ -201,20 +258,62 @@
       credit, totalR, cardDiff: credit - totalR,
       deposits: bank.deposits, withdrawals: bank.withdrawals, bankItems: bank.items,
       netCash: cash - general - bank.deposits + bank.withdrawals,
-      lyCash, lySales,
+      prev, lyCash, lySales, lyCashSource: prev.cash.src, lySalesSource: prev.sales.src,
       // No comparison until something has been entered for the month.
       cashChange: lyCash == null || !cash ? null : cash - lyCash,
       cashChangePct: cash ? pctChange(cash, lyCash) : null,
       salesChange: lySales == null || !sales ? null : sales - lySales,
       salesChangePct: sales ? pctChange(sales, lySales) : null,
-      salaries, salaryTotal: salaries.reduce((s, x) => s + x.amount, 0),
+      salaries, salaryTotal: t.salaryTotal,
       dailySales, dailyCash,
       daysWithSales: dailySales.filter((v) => v).length,
       payoutRows: mo.daily.rows.map((r) => ({ name: r.name, amount: rowTotal(r) })).filter((r) => r.amount),
       generalRows: mo.general.rows.map((r) => ({ name: r.name, amount: rowTotal(r) })).filter((r) => r.amount),
       revenueCash: val(rev.cash), revenueRx: val(rev.rx),
-      hasData: payouts !== 0 || cash !== 0 || general !== 0 || credit !== 0 || totalR !== 0,
+      hasData: t.hasData,
     };
+  }
+
+  const COMPARE_METRICS = {
+    sales: 'Total sales', cash: 'Daily cash', general: 'General expenses', payouts: 'Paid from till', credit: 'Credit card',
+  };
+
+  // Every year in the app side by side for one metric. For cash/sales, a year that isn't in the app
+  // but whose figures were typed as "last year" on the following year is shown too (marked typed).
+  function yearComparison(data, metric) {
+    const stored = Object.keys(data.years).map(Number).sort((a, b) => a - b);
+    const cols = new Map();
+    for (const y of stored) {
+      const values = MONTHS.map((_, m) => { const t = monthTotals(data, y, m); return t && t.hasData ? t[metric] : null; });
+      if (values.some((v) => v != null)) cols.set(y, { year: y, typed: false, values });
+    }
+    for (const y of stored) {
+      const prevNum = y - 1;
+      if (cols.has(prevNum)) continue;
+      const values = MONTHS.map((_, m) => {
+        const mo = data.years[y].months[m];
+        if (metric === 'cash' || metric === 'sales') { const v = mo.daily.lastYear?.[metric]; return v == null || v === '' ? null : val(v); }
+        if (metric === 'credit') { const c = (mo.card.compare || []).find((x) => String(x.label).trim() === String(prevNum)); return c && c.credit != null && c.credit !== '' ? val(c.credit) : null; }
+        return null;
+      });
+      if (values.some((v) => v != null)) cols.set(prevNum, { year: prevNum, typed: true, values });
+    }
+    const years = [...cols.values()].sort((a, b) => a.year - b.year);
+    for (const c of years) {
+      const filled = c.values.filter((v) => v != null);
+      c.total = filled.reduce((a, b) => a + b, 0);
+      c.months = filled.length;
+      c.average = filled.length ? c.total / filled.length : null;
+    }
+    // Year-to-date: only months present in both of the last two years, so a half-finished year compares fairly.
+    let ytd = null;
+    if (years.length >= 2) {
+      const a = years[years.length - 2], b = years[years.length - 1];
+      let sa = 0, sb = 0, n = 0;
+      MONTHS.forEach((_, m) => { if (a.values[m] != null && b.values[m] != null) { sa += a.values[m]; sb += b.values[m]; n++; } });
+      ytd = { from: a.year, to: b.year, months: n, before: sa, now: sb, pct: pctChange(sb, sa) };
+    }
+    return { metric, label: COMPARE_METRICS[metric], years, ytd };
   }
 
   // Cash on hand (the "Total" sheet): opening + daily cash − general expenses − deposits + withdrawals + adjustments.
@@ -296,7 +395,7 @@
   root.Model = {
     MONTHS, uid, evalExpr, val, isExpression, round2, normName, daysInMonth,
     newRow, newMonth, newYear, newData, normalize,
-    rowTotal, mapTotal, dayTotal, monthSummary, cashPosition, yearTotals, employeeTable, employeeSalary,
+    rowTotal, mapTotal, dayTotal, monthTotals, previousYearMonth, categoryComparison, yearComparison, COMPARE_METRICS, pctChange, monthSummary, cashPosition, yearTotals, employeeTable, employeeSalary,
     profitability, listGroups, bankForMonth,
   };
 })(typeof module !== 'undefined' && module.exports ? module.exports : window);

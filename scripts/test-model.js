@@ -37,6 +37,42 @@ assert.strictEqual(Model.normName('AHMET ÇAYLAK'), Model.normName('Ahmet Caylak
   assert.strictEqual(emp.total, 1200);
   assert.strictEqual(emp.allTotal, 1700);
 
+  // Previous-year comparison: stored 2025 data is used automatically, typed figures win, categories line up.
+  data.years[2025] = Model.newYear();
+  const j25 = data.years[2025].months[0];
+  j25.daily.cash = { 3: 4000 };
+  j25.daily.rows.push({ id: 'p1', name: 'turan', cells: { 1: 100 } });
+  j25.general.rows.push({ id: 'p2', name: 'Turan', cells: { 4: 500 } });
+  Model.normalize(data);
+  let s2 = Model.monthSummary(data, 2026, 0);
+  assert.strictEqual(s2.lySales, 4100);
+  assert.strictEqual(s2.lySalesSource, 'data');
+  assert.strictEqual(s2.prev.general.v, 500);
+  assert.strictEqual(Math.round(s2.salesChangePct), Math.round(((5200 - 4100) / 4100) * 100));
+  jan.daily.lastYear.sales = 9999;
+  s2 = Model.monthSummary(data, 2026, 0);
+  assert.strictEqual(s2.lySales, 9999);
+  assert.strictEqual(s2.lySalesSource, 'typed');
+  assert.strictEqual(s2.lyCash, 4000);
+  jan.daily.lastYear.sales = null;
+  const cats = Model.categoryComparison(data, 2026, 0, 'general');
+  assert.strictEqual(cats.length, 1);
+  assert.deepStrictEqual([cats[0].now, cats[0].before], [1000, 500]);
+  const cmp = Model.yearComparison(data, 'sales');
+  assert.deepStrictEqual(cmp.years.map((c) => c.year), [2025, 2026]);
+  assert.strictEqual(cmp.years[0].values[0], 4100);
+  assert.strictEqual(cmp.ytd.months, 1);
+  // A year only known from typed "last year" figures shows up as a typed column.
+  data.years[2025].months[0].daily.cash = {};
+  data.years[2025].months[0].daily.rows = [];
+  data.years[2025].months[0].general.rows = [];
+  data.years[2026].months[1].daily.lastYear.sales = 7000;
+  const cmp2 = Model.yearComparison(data, 'sales');
+  assert.strictEqual(cmp2.years[0].typed, true);
+  assert.strictEqual(cmp2.years[0].values[1], 7000);
+  delete data.years[2025];
+  data.years[2026].months[1].daily.lastYear.sales = null;
+
   const buf = await ExcelIO.exportYear(data, 2026);
   const back = await ExcelIO.importWorkbook(buf, '2026.xlsx');
   assert.strictEqual(Model.rowTotal(back.year.months[0].daily.rows.find((r) => r.name === 'Turan')), 200);

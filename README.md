@@ -13,6 +13,7 @@ A Mac app that replaces `2026StadiumInfo.xlsx`. It does everything the workbook 
 | `3AYLIK NAKIT` (cash vs prescription, profit, ×1.4 projection) | **Profitability** |
 | `Alinan Ilaclar`, `Sheet1`, `STADZEKAT` and any other sheet | **Other Lists** |
 | — | **Monthly Report** (on screen, save as PDF or Excel, print) |
+| — | **Compare Years** (every year in the app side by side) |
 
 ## Getting started
 
@@ -36,6 +37,15 @@ When January comes, **Import / Export → Start 2027…** carries over the categ
 - **Employee salary** for a month = every row with that employee's name in that month's Daily and General Expenses sheets.
   Upper/lower case, spaces and Turkish letters don't matter. If a name is spelled another way, add it under "Also matches".
 - **Credit card Diff** = Credit − Total R.
+
+### Comparing with earlier years
+
+Import each old workbook into its own year (e.g. `2025StadiumInfo.xlsx` → 2025). Then:
+
+- Each month compares itself with the same month last year: total sales, daily cash, paid from till, general expenses, salaries and credit card.
+  If last year is in the app, its real totals are used automatically. A "last year" figure typed on the month's Daily (Till) tab, or imported from the workbook, takes priority and is marked *(typed)*. Clear it to use the stored data.
+- **Compare Years** shows every year in the app month by month, for total sales, daily cash, general expenses, paid from till or credit card, with a chart, totals, averages and the change between the last two years. A "same months" figure compares a part year fairly.
+- The **Monthly Report** has a "Compared with <month> <last year>" section, including category-by-category changes when last year is in the app.
 
 ## Installing on your Mac
 

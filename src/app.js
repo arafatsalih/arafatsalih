@@ -123,6 +123,7 @@
       ${item('bank', 'Bank')}
       ${item('employees', 'Employees')}
       ${item('profit', 'Profitability')}
+      ${item('compare', 'Compare Years')}
       ${item('lists', 'Other Lists')}
       <div class="group">Reports</div>
       ${item('report', 'Monthly Report')}
@@ -138,7 +139,7 @@
     closeMenu();
     renderNav();
     const scroll = view().scrollTop;
-    const views = { dashboard: renderDashboard, month: renderMonth, cash: renderCash, bank: renderBank, employees: renderEmployees, profit: renderProfit, lists: renderLists, report: renderReport, settings: renderSettings };
+    const views = { dashboard: renderDashboard, month: renderMonth, cash: renderCash, bank: renderBank, employees: renderEmployees, profit: renderProfit, compare: renderCompare, lists: renderLists, report: renderReport, settings: renderSettings };
     (views[state.view] || renderDashboard)();
     if (state._keepScroll) view().scrollTop = scroll;
     state._keepScroll = false;
@@ -193,15 +194,21 @@
     else renderNotes(body, mo);
   }
 
+  // "2025: 251,527.00 +4.2%" with a note when the figure was typed rather than taken from stored data.
+  function lyLine(p, now) {
+    if (p.v == null) return '';
+    const ch = now ? M.pctChange(now, p.v) : null;
+    return `${Y() - 1}${p.src === 'typed' ? ' (typed)' : ''}: ${money(p.v)} ${changeSpan(ch)}`;
+  }
   function renderMonthTiles(s) {
     const el = $('#monthTiles');
     if (!el) return;
     el.innerHTML = `
-      <div class="tile"><div class="label">Total sales</div><div class="value">${money(s.sales)}</div><div class="sub">${s.lySales != null ? `Last year ${money(s.lySales)} ${changeSpan(s.salesChangePct)}` : 'No last-year figure'}</div></div>
-      <div class="tile"><div class="label">Daily cash</div><div class="value">${money(s.cash)}</div><div class="sub">${s.lyCash != null ? `Last year ${money(s.lyCash)} ${changeSpan(s.cashChangePct)}` : 'No last-year figure'}</div></div>
-      <div class="tile"><div class="label">Paid from till</div><div class="value">${money(s.payouts)}</div></div>
-      <div class="tile"><div class="label">General expenses</div><div class="value">${money(s.general)}</div></div>
-      <div class="tile"><div class="label">Credit card</div><div class="value">${money(s.credit)}</div><div class="sub">Diff ${money(s.cardDiff)}</div></div>
+      <div class="tile"><div class="label">Total sales</div><div class="value">${money(s.sales)}</div><div class="sub">${lyLine(s.prev.sales, s.sales)}</div></div>
+      <div class="tile"><div class="label">Daily cash</div><div class="value">${money(s.cash)}</div><div class="sub">${lyLine(s.prev.cash, s.cash)}</div></div>
+      <div class="tile"><div class="label">Paid from till</div><div class="value">${money(s.payouts)}</div><div class="sub">${lyLine(s.prev.payouts, s.payouts)}</div></div>
+      <div class="tile"><div class="label">General expenses</div><div class="value">${money(s.general)}</div><div class="sub">${lyLine(s.prev.general, s.general)}</div></div>
+      <div class="tile"><div class="label">Credit card</div><div class="value">${money(s.credit)}</div><div class="sub">Diff ${money(s.cardDiff)}${s.prev.credit.v != null ? ` · ${lyLine(s.prev.credit, s.credit)}` : ''}</div></div>
       <div class="tile"><div class="label">Net cash</div><div class="value ${s.netCash < 0 ? 'down' : ''}">${money(s.netCash)}</div></div>`;
   }
   const refreshTiles = () => renderMonthTiles(M.monthSummary(state.data, Y(), state.month));
@@ -246,9 +253,12 @@
       </div>
       <div class="grid-wrap"><table class="grid"><thead><tr>${head.join('')}</tr></thead><tbody>${rows}${sum}</tbody></table></div>
       ${opts.cash ? `<div class="card" style="margin-top:12px"><h2>Compare with last year</h2><div class="compare">
-        <label>Last year daily cash<input id="lyCash" value="${esc(ly.cash ?? '')}"></label>
-        <label>Last year total sales<input id="lySales" value="${esc(ly.sales ?? '')}"></label>
-        <div id="lyResult" class="hint"></div></div></div>` : ''}`;
+        <label>Last year daily cash<input id="lyCash" value="${esc(ly.cash ?? '')}" placeholder="${state.data.years[Y() - 1] ? esc(fmt(M.monthTotals(state.data, Y() - 1, m).cash)) : ''}"></label>
+        <label>Last year total sales<input id="lySales" value="${esc(ly.sales ?? '')}" placeholder="${state.data.years[Y() - 1] ? esc(fmt(M.monthTotals(state.data, Y() - 1, m).sales)) : ''}"></label>
+        <div id="lyResult" class="hint"></div></div>
+        <p class="hint">${state.data.years[Y() - 1]
+          ? `${Y() - 1} is in the app, so its real totals are used automatically. Anything typed here takes priority — clear these boxes to use the ${Y() - 1} data.`
+          : `Leave empty if you don't know. If you import or enter ${Y() - 1}, its real totals are used automatically.`}</p></div>` : ''}`;
 
     const table = $('table.grid', body);
     const updateSums = () => {
@@ -263,8 +273,8 @@
         const s = M.monthSummary(state.data, Y(), m);
         const lr = $('#lyResult', body);
         if (lr) lr.innerHTML = [
-          s.lyCash != null ? `Daily cash: ${money(s.cashChange)} (${changeSpan(s.cashChangePct)})` : '',
-          s.lySales != null ? `Total sales: ${money(s.salesChange)} (${changeSpan(s.salesChangePct)})` : '',
+          s.cashChange != null ? `Daily cash: ${money(s.cashChange)} (${changeSpan(s.cashChangePct)}) vs ${money(s.lyCash)}${s.lyCashSource === 'data' ? ` from ${Y() - 1} data` : ''}` : '',
+          s.salesChange != null ? `Total sales: ${money(s.salesChange)} (${changeSpan(s.salesChangePct)}) vs ${money(s.lySales)}${s.lySalesSource === 'data' ? ` from ${Y() - 1} data` : ''}` : '',
         ].filter(Boolean).join(' &nbsp;·&nbsp; ');
       }
     };
@@ -569,6 +579,64 @@
       for (let m = 0; m < 12; m++) { const s = M.monthSummary(state.data, Y(), m); y.revenue[m].cash = s.sales ? M.round2(s.sales) : null; }
       save(); render();
     });
+  }
+
+  // ---------- Compare years ----------
+  function renderCompare() {
+    const metric = state.compareMetric || 'sales';
+    const c = M.yearComparison(state.data, metric);
+    setHeader('Compare Years', `<select id="cmpMetric">${Object.entries(M.COMPARE_METRICS).map(([k, l]) => `<option value="${k}" ${k === metric ? 'selected' : ''}>${l}</option>`).join('')}</select>`);
+    if (!c.years.length) {
+      view().innerHTML = `<div class="empty">No data to compare yet. Import your workbooks from earlier years (Import / Export → Import Excel…), each one into its own year.</div>`;
+    } else {
+      const ys = c.years;
+      const last = ys[ys.length - 1], before = ys.length > 1 ? ys[ys.length - 2] : null;
+      const colorOf = (y) => `var(--series-${(((y % 8) + 8) % 8) + 1})`;
+      const cell = (v) => (v == null ? '<span class="hint">–</span>' : money(v));
+      const chg = (now, was) => (now == null || was == null ? '' : changeSpan(M.pctChange(now, was)));
+      const typedNote = ys.some((y) => y.typed);
+      view().innerHTML = `
+        <div class="tiles">
+          ${ys.slice().reverse().map((y) => `<div class="tile"><div class="label"><span class="swatch" style="background:${colorOf(y.year)}"></span>${y.year}${y.typed ? ' (typed)' : ''}</div><div class="value">${money(y.total)}</div><div class="sub">${y.months} month${y.months === 1 ? '' : 's'} · avg ${money(y.average)}</div></div>`).join('')}
+          ${c.ytd && c.ytd.months ? `<div class="tile"><div class="label">${c.ytd.to} vs ${c.ytd.from}, same ${c.ytd.months} month${c.ytd.months === 1 ? '' : 's'}</div><div class="value">${changeSpan(c.ytd.pct) || '–'}</div><div class="sub">${money(c.ytd.now)} vs ${money(c.ytd.before)}</div></div>` : ''}
+        </div>
+        <div class="card"><h2>${c.label} by month</h2>
+          <div class="legend">${ys.map((y) => `<span><span class="swatch" style="background:${colorOf(y.year)}"></span>${y.year}${y.typed ? ' (typed)' : ''}</span>`).join('')}</div>
+          <div class="chart">${groupedChart(ys, colorOf)}</div></div>
+        <div class="card"><h2>Table</h2><div style="overflow:auto"><table class="data"><thead><tr><th>Month</th>${ys.map((y) => `<th>${y.year}${y.typed ? '*' : ''}</th>`).join('')}${before ? `<th>${last.year} vs ${before.year}</th>` : ''}</tr></thead><tbody>
+          ${M.MONTHS.map((n, m) => `<tr><td>${n}</td>${ys.map((y) => `<td>${cell(y.values[m])}</td>`).join('')}${before ? `<td>${chg(last.values[m], before.values[m])}</td>` : ''}</tr>`).join('')}
+          <tr class="total"><td>Total</td>${ys.map((y) => `<td>${money(y.total)}</td>`).join('')}${before ? `<td>${chg(last.total, before.total)}</td>` : ''}</tr>
+          <tr><td>Monthly average</td>${ys.map((y) => `<td>${cell(y.average)}</td>`).join('')}${before ? `<td>${chg(last.average, before.average)}</td>` : ''}</tr>
+        </tbody></table></div>
+        <p class="hint">Every year in the app is shown. ${typedNote ? '* Typed: this year isn\'t in the app, so the "last year" figures typed on (or imported into) the following year are used. ' : ''}A year's total only includes months with entries, so compare a part year using the "same months" tile.</p></div>`;
+    }
+    $('#cmpMetric').addEventListener('change', (e) => { state.compareMetric = e.target.value; renderCompare(); });
+  }
+
+  // Grouped bars: one group per month, one bar per year. Hover a bar for its exact value.
+  function groupedChart(years, colorOf) {
+    const W = 900, H = 260, padL = 64, padB = 24, padT = 8, padR = 8;
+    const max = Math.max(1, ...years.flatMap((y) => y.values.map((v) => v || 0)));
+    const p = Math.pow(10, Math.floor(Math.log10(max))), f = max / p;
+    const nice = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+    const gw = (W - padL - padR) / 12, inner = gw * 0.8, bw = inner / years.length;
+    const y = (v) => padT + (H - padT - padB) * (1 - v / nice);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Comparison by month">`;
+    for (let i = 0; i <= 4; i++) {
+      const v = (nice / 4) * i;
+      svg += `<line class="gridline" x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}"/><text x="${padL - 6}" y="${y(v) + 3}" text-anchor="end">${Math.round(v).toLocaleString('en-US')}</text>`;
+    }
+    M.MONTHS.forEach((n, m) => {
+      const gx = padL + m * gw + (gw - inner) / 2;
+      years.forEach((yr, i) => {
+        const v = yr.values[m];
+        if (!v || v <= 0) return;
+        const x = gx + i * bw + 1, w = Math.max(1, bw - 2), top = y(v), h = y(0) - top, r = Math.min(4, w / 2, h);
+        svg += `<g><title>${n} ${yr.year}: ${money(v)}</title><path d="M${x},${y(0)} V${top + r} Q${x},${top} ${x + r},${top} H${x + w - r} Q${x + w},${top} ${x + w},${top + r} V${y(0)} Z" style="fill:${colorOf(yr.year)}"/></g>`;
+      });
+      svg += `<text x="${padL + m * gw + gw / 2}" y="${H - 7}" text-anchor="middle">${n.slice(0, 3)}</text>`;
+    });
+    return svg + '</svg>';
   }
 
   // ---------- Other lists (Alinan Ilaclar, cheques, zekat…) ----------

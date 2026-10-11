@@ -563,16 +563,21 @@
     ws.columns = [{ width: 34 }, { width: 16, style: { numFmt: MONEY } }, { width: 16, style: { numFmt: MONEY } }, { width: 12 }];
     ws.addRow([`Monthly Report — ${MONTHS[m]} ${yearNum}`]).font = { bold: true, size: 14 };
     ws.addRow([]);
-    styleHeader(ws.addRow(['Summary', 'This month', 'Last year', 'Change %']));
-    const pct = (v) => (v == null ? '' : v / 100);
+    styleHeader(ws.addRow(['Summary', `${MONTHS[m]} ${yearNum}`, `${MONTHS[m]} ${yearNum - 1}`, 'Change %']));
     const add = (label, a, b, c) => { const r = ws.addRow([label, a, b, c]); r.getCell(4).numFmt = '0.0%'; return r; };
-    add('Total sales', s.sales, s.lySales, pct(s.salesChangePct));
-    add('Daily cash', s.cash, s.lyCash, pct(s.cashChangePct));
-    add('Paid from till (daily expenses)', s.payouts);
-    add('General expenses', s.general);
-    add('Salaries', s.salaryTotal);
-    add('Credit card', s.credit);
-    add('Total R', s.totalR);
+    const p = s.prev;
+    const cmp = (label, now, x) => {
+      const r = add(label, now, x ? x.v : null);
+      if (x && x.v) r.getCell(4).value = { formula: `IF(B${r.number}=0,"",(B${r.number}-C${r.number})/C${r.number})` };
+      return r;
+    };
+    cmp('Total sales', s.sales, p.sales);
+    cmp('Daily cash', s.cash, p.cash);
+    cmp('Paid from till (daily expenses)', s.payouts, p.payouts);
+    cmp('General expenses', s.general, p.general);
+    cmp('Salaries', s.salaryTotal, p.salaryTotal);
+    cmp('Credit card', s.credit, p.credit);
+    cmp('Total R', s.totalR, p.totalR);
     add('Card difference', s.cardDiff);
     add('Bank deposits', s.deposits);
     add('Bank withdrawals', s.withdrawals);
@@ -588,6 +593,19 @@
       }
       styleTotal(ws.addRow(['Total', total]));
     };
+    if (p.stored) {
+      for (const [sheet, title] of [['general', 'General expenses vs last year'], ['daily', 'Paid from till vs last year']]) {
+        const rows = M.categoryComparison(data, yearNum, m, sheet);
+        if (!rows.length) continue;
+        ws.addRow([]);
+        styleHeader(ws.addRow([title, `${yearNum}`, `${yearNum - 1}`, 'Change %']));
+        for (const r of rows) {
+          const row = ws.addRow([r.name, r.now, r.before]);
+          if (r.before) row.getCell(4).value = { formula: `(B${row.number}-C${row.number})/C${row.number}` };
+          row.getCell(4).numFmt = '0.0%';
+        }
+      }
+    }
     section('General expenses by category', s.generalRows);
     section('Paid from till by category', s.payoutRows);
     section('Salaries', s.salaries.filter((x) => x.amount));

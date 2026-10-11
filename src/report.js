@@ -64,11 +64,40 @@
     const best = s.dailySales.reduce((b, v, i) => (v > b.v ? { v, i } : b), { v: 0, i: -1 });
     const salaries = s.salaries.filter((x) => x.amount);
 
+    const p = s.prev;
+    const lyName = `${M.MONTHS[m]} ${p.year}`;
+    const srcNote = (x) => (x.src === 'typed' ? ' (typed)' : '');
+    const lyRow = (label, now, x) => `<tr><td>${label}</td><td class="r">${fmt(now)}</td><td class="r">${x.v == null ? '–' : fmt(x.v) + srcNote(x)}</td>
+      <td class="r">${x.v == null ? '–' : fmt(now - x.v)}</td><td class="r ${x.v == null || !now ? '' : cls(now - x.v)}">${x.v == null || !now ? '–' : pct(M.pctChange(now, x.v))}</td></tr>`;
+    const hasLy = ['sales', 'cash', 'payouts', 'general', 'credit', 'totalR', 'salaryTotal'].some((k) => p[k].v != null);
+    const catTable = (sheet, title) => {
+      if (!p.stored) return '';
+      const rows = M.categoryComparison(data, yearNum, m, sheet);
+      if (!rows.length) return '';
+      return `<h3>${title}</h3><table class="t"><thead><tr><th>Category</th><th class="r">${esc(name)}</th><th class="r">${esc(lyName)}</th><th class="r">Change</th><th class="r">%</th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="r">${fmt(r.now)}</td><td class="r">${fmt(r.before)}</td><td class="r">${fmt(r.change)}</td><td class="r">${r.before && r.now ? pct(r.pct) : r.before ? 'stopped' : 'new'}</td></tr>`).join('')}</tbody></table>`;
+    };
+    const compareSection = hasLy ? `<h2>Compared with ${esc(lyName)}</h2>
+      <table class="t"><thead><tr><th></th><th class="r">${esc(name)}</th><th class="r">${esc(lyName)}</th><th class="r">Change</th><th class="r">%</th></tr></thead><tbody>
+        ${lyRow('Total sales', s.sales, p.sales)}${lyRow('Daily cash', s.cash, p.cash)}${lyRow('Paid from till', s.payouts, p.payouts)}
+        ${lyRow('General expenses', s.general, p.general)}${lyRow('Salaries', s.salaryTotal, p.salaryTotal)}${lyRow('Credit card', s.credit, p.credit)}${lyRow('Total R', s.totalR, p.totalR)}
+      </tbody></table>
+      ${p.stored ? '' : `<p class="muted">${p.year} isn't in the app, so only the figures typed for last year are compared. Import ${p.year} to compare everything, including categories.</p>`}
+      ${catTable('general', 'General expenses by category')}${catTable('daily', 'Paid from till by category')}` : '';
+    // Earlier years for this month's credit card: stored data wins over typed rows for the same year.
+    const cardMap = new Map();
+    for (const c of mo.card.compare) cardMap.set(String(c.label).trim(), { label: String(c.label).trim(), credit: c.credit == null || c.credit === '' ? null : M.val(c.credit), totalR: c.totalR == null || c.totalR === '' ? null : M.val(c.totalR), typed: true });
+    for (const y of Object.keys(data.years)) {
+      if (Number(y) >= Number(yearNum)) continue;
+      const t = M.monthTotals(data, Number(y), m);
+      if (t && (t.credit || t.totalR)) cardMap.set(String(y), { label: String(y), credit: t.credit, totalR: t.totalR, typed: false });
+    }
+    const cardYears = [...cardMap.values()].sort((a, b) => b.label.localeCompare(a.label));
     const tile = (label, value, sub, subCls) => `<div class="tile"><div class="l">${label}</div><div class="v">${value}</div>${sub ? `<div class="s ${subCls || ''}">${sub}</div>` : ''}</div>`;
 
     return `<!doctype html><html><head><meta charset="utf-8"><title>Monthly Report ${esc(name)}</title><style>
       *{box-sizing:border-box}body{font:12px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;color:#151515;margin:0;padding:28px;background:#fff}
-      h1{font-size:22px;margin:0}h2{font-size:14px;margin:22px 0 8px;padding-bottom:4px;border-bottom:1px solid #ddd}
+      h1{font-size:22px;margin:0}h3{font-size:12px;margin:14px 0 6px;color:#444}h2{font-size:14px;margin:22px 0 8px;padding-bottom:4px;border-bottom:1px solid #ddd}
       .head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px}.muted{color:#777}
       .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.tile{min-width:0;border:1px solid #e1e1dc;border-radius:8px;padding:8px 10px}
       .tile .l{color:#555;font-size:11px}.tile .v{font-size:17px;font-weight:650;font-variant-numeric:tabular-nums}.tile .s{font-size:11px;color:#777}
@@ -83,9 +112,9 @@
       <div class="muted">Generated ${new Date().toLocaleDateString('en-GB')}</div></div>
 
     <div class="tiles">
-      ${tile('Total sales', fmt(s.sales), s.lySales != null ? `${pct(s.salesChangePct)} vs last year (${fmt0(s.lySales)})` : `${vsPrev('sales')} vs previous month`, cls(s.salesChangePct))}
-      ${tile('Daily cash', fmt(s.cash), s.lyCash != null ? `${pct(s.cashChangePct)} vs last year (${fmt0(s.lyCash)})` : `${vsPrev('cash')} vs previous month`, cls(s.cashChangePct))}
-      ${tile('General expenses', fmt(s.general), `${vsPrev('general')} vs previous month`)}
+      ${tile('Total sales', fmt(s.sales), s.salesChangePct != null ? `${pct(s.salesChangePct)} vs ${esc(lyName)} (${fmt0(s.lySales)})` : `${vsPrev('sales')} vs previous month`, cls(s.salesChangePct))}
+      ${tile('Daily cash', fmt(s.cash), s.cashChangePct != null ? `${pct(s.cashChangePct)} vs ${esc(lyName)} (${fmt0(s.lyCash)})` : `${vsPrev('cash')} vs previous month`, cls(s.cashChangePct))}
+      ${tile('General expenses', fmt(s.general), p.general.v != null && s.general ? `${pct(M.pctChange(s.general, p.general.v))} vs ${esc(lyName)} (${fmt0(p.general.v)})` : `${vsPrev('general')} vs previous month`)}
       ${tile('Cash on hand (month end)', fmt(cp.months[m].balance), `Net this month ${fmt(s.netCash)}`, cls(s.netCash))}
       ${tile('Credit card', fmt(s.credit), `Total R ${fmt(s.totalR)}`)}
       ${tile('Card difference', fmt(s.cardDiff), 'Credit − Total R', cls(s.cardDiff))}
@@ -107,6 +136,8 @@
       <tr class="tot"><td>Cash on hand at end of month</td><td class="r">${fmt(cp.months[m].balance)}</td></tr>
     </tbody></table>
 
+    ${compareSection}
+
     <h2>General expenses</h2>${hBars(s.generalRows, s.general)}
     <h2>Paid from till (daily expenses)</h2>${hBars(s.payoutRows, s.payouts)}
 
@@ -118,10 +149,10 @@
         <tr class="tot"><td>Total</td><td class="r">${fmt(s.deposits)}</td><td class="r">${fmt(s.withdrawals)}</td><td></td></tr></tbody></table>` : '<p class="muted">No bank movements.</p>'}</div>
     </div>
 
-    ${mo.card.compare.length ? `<h2>Credit card vs previous years</h2><table class="t"><thead><tr><th>Year</th><th class="r">Credit</th><th class="r">Total R</th><th class="r">Credit change</th></tr></thead><tbody>
+    ${cardYears.length ? `<h2>Credit card vs previous years</h2><table class="t"><thead><tr><th>Year</th><th class="r">Credit</th><th class="r">Total R</th><th class="r">Credit change</th></tr></thead><tbody>
       <tr class="tot"><td>${yearNum}</td><td class="r">${fmt(s.credit)}</td><td class="r">${fmt(s.totalR)}</td><td></td></tr>
-      ${mo.card.compare.map((c) => `<tr><td>${esc(c.label)}</td><td class="r">${c.credit == null ? '–' : fmt(M.val(c.credit))}</td><td class="r">${c.totalR == null ? '–' : fmt(M.val(c.totalR))}</td>
-        <td class="r">${c.credit ? pct(((s.credit - M.val(c.credit)) / M.val(c.credit)) * 100) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
+      ${cardYears.map((c) => `<tr><td>${esc(c.label)}${c.typed ? ' (typed)' : ''}</td><td class="r">${c.credit == null ? '–' : fmt(c.credit)}</td><td class="r">${c.totalR == null ? '–' : fmt(c.totalR)}</td>
+        <td class="r">${c.credit && s.credit ? pct(M.pctChange(s.credit, c.credit)) : '–'}</td></tr>`).join('')}</tbody></table>` : ''}
 
     <h2>Day by day</h2>
     <table class="t"><thead><tr><th>Day</th><th class="r">Total sales</th><th class="r">Daily cash</th><th class="r">Paid from till</th><th class="r">General exp.</th><th class="r">Card</th></tr></thead><tbody>
