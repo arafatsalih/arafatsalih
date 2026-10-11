@@ -472,6 +472,7 @@
     setHeader('Cash on Hand');
     view().innerHTML = `
       <div class="tiles"><div class="tile"><div class="label">Cash on hand now</div><div class="value">${money(cp.total)}</div></div></div>
+      ${importCheckCard(y, cp)}
       <div class="card"><h2>Opening balance</h2><div class="compare">
         <label>Description<input id="openLabel" value="${esc(y.openingLabel)}" style="width:260px;text-align:left"></label>
         <label>Amount<input id="openAmt" value="${esc(cellText(y.openingBalance))}"></label></div></div>
@@ -491,6 +492,22 @@
     t.addEventListener('change', (e) => { const a = y.adjustments[e.target.closest('tr').dataset.i]; a[e.target.dataset.k] = e.target.dataset.k === 'amount' ? parseInput(e.target.value) : e.target.value; save(); state._keepScroll = true; render(); });
     t.addEventListener('click', (e) => { const b = e.target.closest('[data-del]'); if (b) { y.adjustments.splice(Number(b.dataset.del), 1); save(); state._keepScroll = true; render(); } });
     $('#addAdj').addEventListener('click', () => { y.adjustments.push({ id: M.uid(), label: '', amount: null }); save(); state._keepScroll = true; render(); });
+  }
+
+  // Shows how the app's cash on hand compared with the workbook's "Total Cash Amount" when it was imported.
+  function importCheckCard(y, cp) {
+    const ic = y.importCheck;
+    if (!ic) return '';
+    const diff = M.round2((ic.appTotal ?? cp.total) - ic.excelTotal);
+    const ok = Math.abs(diff) < 0.01;
+    return `<div class="card"><h2>Check against Excel (imported ${esc(ic.date)})</h2>
+      <table class="data" style="max-width:520px"><tbody>
+        <tr><td>Excel "Total Cash Amount"</td><td>${money(ic.excelTotal)}</td></tr>
+        <tr><td>App cash on hand at import</td><td>${money(ic.appTotal)}</td></tr>
+        <tr class="total"><td>Difference</td><td class="${ok ? 'up' : 'down'}">${ok ? '✓ Same' : money(diff)}</td></tr></tbody></table>
+      ${ic.adjustmentsAdded ? `<p class="hint">${ic.adjustmentsAdded} amount(s) that the Excel formula adds outside the normal daily cash / expenses / bank figures were added below under Adjustments, so the totals match the workbook.</p>` : ''}
+      ${ic.notes.length ? `<ul class="hint">${ic.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      <p class="hint">Since the import, the cash on hand changes as you enter new figures. That's expected.</p></div>`;
   }
 
   // ---------- Bank ----------
@@ -737,9 +754,16 @@
       Object.assign(state.data.settings, res.settings);
       state.data.currentYear = yearNum;
       state.data = M.normalize(state.data);
+      const ic = state.data.years[yearNum].importCheck;
+      if (ic) ic.appTotal = M.round2(M.cashPosition(state.data, yearNum).total);
       save();
-      go('dashboard');
-      toast(`Imported ${f.name} into ${yearNum}`);
+      if (ic && Math.abs(ic.appTotal - ic.excelTotal) >= 0.01) {
+        go('cash');
+        toast(`Imported. Cash on hand differs from Excel by ${money(ic.appTotal - ic.excelTotal)} — see "Check against Excel".`);
+      } else {
+        go('dashboard');
+        toast(`Imported ${f.name} into ${yearNum}${ic ? ' — cash on hand matches Excel ✓' : ''}`);
+      }
     } catch (e) {
       console.error(e);
       alert('Could not import this file: ' + e.message);
@@ -834,7 +858,7 @@
   if (native) native.onMenu((cmd) => ({ 'import-excel': importExcel, 'export-excel': exportExcel, report: () => go('report'), backup, restore }[cmd] || (() => {}))());
 
   // Test hook for automated checks in a browser.
-  window.__cashbook = { state, render, go, importBuffer: async (buf, name) => { const r = await window.ExcelIO.importWorkbook(buf, name); state.data.years[r.yearNum] = r.year; Object.assign(state.data.settings, r.settings); state.data.currentYear = r.yearNum; state.data = M.normalize(state.data); save(); render(); } };
+  window.__cashbook = { state, render, go, importBuffer: async (buf, name) => { const r = await window.ExcelIO.importWorkbook(buf, name); state.data.years[r.yearNum] = r.year; Object.assign(state.data.settings, r.settings); state.data.currentYear = r.yearNum; state.data = M.normalize(state.data); const ic = state.data.years[r.yearNum].importCheck; if (ic) ic.appTotal = M.round2(M.cashPosition(state.data, r.yearNum).total); save(); render(); } };
 
   applyTheme();
   load().then(() => {

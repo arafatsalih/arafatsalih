@@ -61,10 +61,25 @@
     // Some sheets carry 29-31 day columns regardless of the month; the "Total" heading wins if present.
     let totalCol = nDays ? 2 + nDays : 2 + daysInMonth(yearNum, m);
     for (let c = 2; c <= 40; c++) if (normName(cv(header.getCell(c)).text) === 'total') { totalCol = c; break; }
-    nDays = Math.min(totalCol - 2, daysInMonth(yearNum, m));
+    const sheetDays = totalCol - 2; // day columns in the sheet (February has 29, September/November 31)
+    nDays = Math.min(sheetDays, daysInMonth(yearNum, m));
     const rows = [];
+    // The total row's own formula (e.g. "SUM(B3:B50)") decides which rows count; Excel skips row 2 ("Maaslar") this way.
+    let sumFrom = 2, sumTo = Infinity, totalRow = null, cashRow = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const n = normName(cv(ws.getRow(r).getCell(1)).text);
+      if (n === 'totalsales' || n === 'totalexpenses') {
+        totalRow = r;
+        const f = cv(ws.getRow(r).getCell(2)).formula || '';
+        const mm = /^SUM\(\$?B\$?(\d+):\$?B\$?(\d+)\)$/i.exec(f.replace(/\s+/g, ''));
+        if (mm) { sumFrom = Number(mm[1]); sumTo = Number(mm[2]); }
+        break;
+      }
+    }
     let cash = {}, lastYear = { cash: null, sales: null };
 
+    const skipped = [];
+    const rowSum = (row) => { let t = 0; for (let d = 1; d <= nDays; d++) t += val(dataValue(row.getCell(1 + d))); return t; };
     const readCells = (row) => {
       const cells = {};
       for (let d = 1; d <= nDays; d++) {
@@ -85,16 +100,17 @@
       const row = ws.getRow(r);
       const label = cv(row.getCell(1)).text;
       const n = normName(label);
-      if (kind === 'daily' && n === 'dailycash') { cash = readCells(row); lastYear.cash = lastYearValue(row); continue; }
+      if (kind === 'daily' && n === 'dailycash') { cash = readCells(row); lastYear.cash = lastYearValue(row); cashRow = r; continue; }
       if (n === 'totalsales') { lastYear.sales = lastYearValue(row); break; }
       if (n === 'totalexpenses' || n === 'total') break;
       const totalFormula = cv(row.getCell(totalCol)).formula;
       const numbers = hasNumber(row, 2, totalCol - 1);
       if (!label && !numbers) continue;
       if (label && !numbers && !totalFormula) continue; // section headings like "Maaslar"
+      if (r < sumFrom || r > sumTo) { if (numbers) skipped.push({ sheet: ws.name, row: r, label, total: rowSum(row) }); continue; }
       rows.push({ id: uid(), name: label || `Row ${r}`, cells: readCells(row) });
     }
-    return { rows, cash, lastYear };
+    return { rows, cash, lastYear, nDays, sheetDays, cashRow, totalRow, skipped };
   }
 
   function parseCreditCard(ws, year) {
@@ -243,6 +259,96 @@
     return list;
   }
 
+  // ---------- reconcile with the workbook's "Total Cash Amount" ----------
+
+  // Splits "A+SUM(x)-SUM(y)" into signed top-level terms.
+  function splitTerms(f) {
+    const terms = [];
+    let depth = 0, quote = false, cur = '', sign = 1;
+    for (const ch of f.replace(/^=/, '')) {
+      if (ch === "'") quote = !quote;
+      if (!quote && ch === '(') depth++;
+      if (!quote && ch === ')') depth--;
+      if (!quote && depth === 0 && (ch === '+' || ch === '-')) {
+        if (cur.trim()) terms.push({ sign, text: cur.trim() });
+        sign = ch === '-' ? -1 : 1;
+        cur = '';
+        continue;
+      }
+      cur += ch;
+    }
+    if (cur.trim()) terms.push({ sign, text: cur.trim() });
+    return terms;
+  }
+  const colNum = (L) => L.toUpperCase().split('').reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+  const REF = /^(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_.]+))!)?\$?([A-Z]{1,3})\$?(\d+)(?::(?:(?:'(?:[^']|'')+'|[A-Za-z0-9_.]+)!)?\$?([A-Z]{1,3})\$?(\d+))?$/;
+
+  function reconcileTotal(wb, totalWs, layout, year, yearNum, skippedRows) {
+    let cell = null;
+    for (let r = 1; r <= Math.min(totalWs.rowCount, 30) && !cell; r++) {
+      if (/total\s*cash/i.test(cv(totalWs.getRow(r).getCell(1)).text)) cell = totalWs.getRow(r).getCell(2);
+    }
+    if (!cell) return null;
+    const c = cv(cell);
+    if (!c.formula || c.num === null) return null;
+    const notes = [];
+    const adjustments = [];
+    const sheetOf = (name) => (name ? wb.worksheets.find((w) => normName(w.name) === normName(name.replace(/''/g, "'"))) : totalWs);
+    const openingRow = (() => { for (let r = 1; r <= totalWs.rowCount; r++) if (/transfer/i.test(cv(totalWs.getRow(r).getCell(1)).text)) return r; return null; })();
+    let unparsed = false;
+    for (const t of splitTerms(c.formula)) {
+      const body = /^SUM\((.*)\)$/i.exec(t.text);
+      const args = body ? body[1].split(',') : [t.text];
+      for (const a of args) {
+        const arg = a.trim();
+        if (/^-?\d+(\.\d+)?$/.test(arg)) { adjustments.push({ label: `Excel Total: number ${arg}`, amount: t.sign * Number(arg) }); continue; }
+        const mm = REF.exec(arg);
+        const ws = mm && sheetOf(mm[1] || mm[2]);
+        if (!mm || !ws) { unparsed = true; notes.push(`Could not read the part "${arg}" of the Excel formula.`); continue; }
+        const c1 = colNum(mm[3]), r1 = Number(mm[4]), c2 = mm[5] ? colNum(mm[5]) : c1, r2 = mm[6] ? Number(mm[6]) : r1;
+        const lay = layout[normName(ws.name)];
+        let extra = 0;
+        const extraCols = new Set();
+        for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r++) {
+          for (let cc = Math.min(c1, c2); cc <= Math.max(c1, c2); cc++) {
+            const x = cv(ws.getRow(r).getCell(cc));
+            const v = x.num !== null && !(x.formula === null && x.text && typeof ws.getRow(r).getCell(cc).value === 'string') ? x.num : 0; // Excel's SUM skips text
+            if (!v) continue;
+            let covered = false;
+            if (lay && lay.kind === 'daily') covered = r === lay.cashRow && cc >= 2 && cc <= 1 + lay.nDays;
+            else if (lay && lay.kind === 'general') covered = r === lay.totalRow && cc >= 2 && cc <= 1 + lay.nDays;
+            else if (lay && lay.kind === 'bank') covered = cc === 2 || cc === 3;
+            else if (ws === totalWs) covered = r === openingRow && cc === 2;
+            if (!covered) { extra += v; extraCols.add(colLetter(cc)); }
+          }
+        }
+        if (extra) {
+          let why = '';
+          if (lay && (lay.kind === 'daily' || lay.kind === 'general')) {
+            why = [...extraCols].every((L) => colNum(L) > 1 + lay.nDays)
+              ? ` — column ${[...extraCols].join(', ')} is past the last day of ${MONTHS[lay.m]}`
+              : ' — cells outside the Daily Cash / Total Expenses row';
+          }
+          adjustments.push({ label: `From Excel Total: ${t.sign < 0 ? '−' : '+'}${arg}${why}`, amount: t.sign * extra });
+        }
+      }
+    }
+    for (const a of adjustments) year.adjustments.push({ id: uid(), label: a.label, amount: M.round2(a.amount) });
+    for (const sk of skippedRows) notes.push(`${sk.sheet} row ${sk.row}${sk.label ? ` ("${sk.label}")` : ''} has ${M.round2(sk.total)} but is outside the sheet's Total Expenses formula, so Excel doesn't count it. The app doesn't either.`);
+    // Numbers typed as text: Excel's SUM ignores them, the app counts them. List them so they can be checked.
+    const textCells = [];
+    for (const [nm, lay] of Object.entries(layout)) {
+      const ws = wb.worksheets.find((w) => normName(w.name) === nm);
+      if (!ws || (lay.kind !== 'daily' && lay.kind !== 'general' && lay.kind !== 'bank')) continue;
+      ws.eachRow((row, r) => row.eachCell((cl, cc) => {
+        if (typeof cl.value === 'string' && /^-?\d+([.,]\d+)?$/.test(cl.value.trim()) && cc >= 2 && (lay.kind === 'bank' ? cc <= 3 && r >= 3 : cc <= 1 + lay.nDays && (!lay.totalRow || r < lay.totalRow))) textCells.push(`${ws.name}!${colLetter(cc)}${r} = ${cl.value.trim()}`);
+      }));
+    }
+    if (textCells.length) notes.push(`These cells hold a number stored as text. Excel's formulas ignore them, but the app counts them: ${textCells.slice(0, 12).join('; ')}${textCells.length > 12 ? ` … (${textCells.length} in all)` : ''}.`);
+    if (unparsed) notes.push('Part of the Excel formula could not be read, so the check may be incomplete.');
+    return { excelTotal: c.num, formula: c.formula, adjustmentsAdded: adjustments.length, notes, date: new Date().toISOString().slice(0, 10) };
+  }
+
   async function importWorkbook(buffer, fileName) {
     const ExcelJS = getExcel();
     const wb = new ExcelJS.Workbook();
@@ -256,15 +362,21 @@
     const byName = {};
     wb.eachSheet((ws) => { byName[normName(ws.name)] = ws; });
     const used = new Set();
+    const layout = {}; // normalized sheet name -> { kind, m, nDays, cashRow, totalRow }
+    const skippedRows = [];
     MONTHS.forEach((name, m) => {
       const d = byName[normName(name)], g = byName[normName(name + 'Exp')];
       if (d) {
         const p = parseMonthSheet(d, yearNum, m, 'daily');
         year.months[m].daily = { rows: p.rows, cash: p.cash, lastYear: p.lastYear };
+        layout[normName(d.name)] = { kind: 'daily', m, nDays: p.nDays, cashRow: p.cashRow };
         used.add(d.name);
       }
       if (g) {
-        year.months[m].general = { rows: parseMonthSheet(g, yearNum, m, 'general').rows };
+        const p = parseMonthSheet(g, yearNum, m, 'general');
+        year.months[m].general = { rows: p.rows };
+        layout[normName(g.name)] = { kind: 'general', m, nDays: p.nDays, totalRow: p.totalRow };
+        skippedRows.push(...p.skipped);
         used.add(g.name);
       }
     });
@@ -272,7 +384,7 @@
     const cc = pick(/^creditcard|^kredikart/);
     if (cc) { parseCreditCard(cc, year); used.add(cc.name); }
     const bank = pick(/^bank/);
-    if (bank) { parseBank(bank, year); used.add(bank.name); }
+    if (bank) { parseBank(bank, year); used.add(bank.name); layout[normName(bank.name)] = { kind: 'bank' }; }
     const total = pick(/^total$|^toplam$/);
     if (total) { parseTotal(total, year); used.add(total.name); }
     const emp = pick(/^employees|^personel|^calisan/);
@@ -283,6 +395,7 @@
       if (used.has(ws.name) || ws.state === 'veryHidden') continue;
       year.lists.push(parseList(ws));
     }
+    if (total) year.importCheck = reconcileTotal(wb, total, layout, year, yearNum, skippedRows);
     return { yearNum, year, settings };
   }
 
