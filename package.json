@@ -11,7 +11,7 @@
     "postinstall": "node scripts/copy-vendor.js",
     "start": "electron .",
     "test": "node scripts/test-model.js",
-    "dist": "electron-builder --mac --universal"
+    "dist": "electron-builder --mac --universal --publish never"
   },
   "dependencies": {},
   "devDependencies": {
@@ -33,7 +33,7 @@
     "mac": {
       "category": "public.app-category.finance",
       "icon": "build/icon.png",
-      "identity": "-",
+      "identity": null,
       "target": [
         {
           "target": "dmg"
@@ -44,6 +44,7 @@
       ],
       "hardenedRuntime": false,
       "gatekeeperAssess": false
-    }
+    },
+    "afterSign": "scripts/adhoc-sign.js"
   }
 }
